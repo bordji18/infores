@@ -1,41 +1,59 @@
 from flask import Flask, render_template, request
 import pandas as pd
+import os
+import unicodedata
 
 app = Flask(__name__)
-EXCEL_PATH = "static/data.xlsx"
 
-# تحميل الملف مرة واحدة لكل ورقة
-sheet_data = pd.read_excel(EXCEL_PATH, sheet_name=None)
+# تحميل الملف مرة واحدة عند بداية التشغيل
+excel_path = 'static/data.xlsx'
+sheets = pd.read_excel(excel_path, sheet_name=None)
 
-@app.route("/", methods=["GET", "POST"])
+# تطبيع الحروف العربية
+def normalize_arabic(text):
+    text = str(text)
+    text = text.replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا')
+    return text.strip()
+
+@app.route('/', methods=['GET', 'POST'])
 def index():
     result = None
     error = None
 
-    if request.method == "POST":
-        section = request.form.get("section")
-        last_name = request.form.get("last_name", "").strip().lower()
-        first_name = request.form.get("first_name", "").strip().lower()
+    if request.method == 'POST':
+        section = request.form['section']
+        last_name = normalize_arabic(request.form['last_name'])
+        first_name = normalize_arabic(request.form['first_name'])
+        birth_date = request.form['birth_date']
 
-        df = sheet_data.get(section)
-        if df is not None:
-            for _, row in df.iterrows():
-                ln = str(row.iloc[1]).strip().lower()
-                fn = str(row.iloc[2]).strip().lower()
-                if ln == last_name and fn == first_name:
-                    result = {
-                        "last_name": row.iloc[1],
-                        "first_name": row.iloc[2],
-                        "average": row.iloc[6] if len(row) > 6 else "غير متوفر",
-                        "exam": row.iloc[7] if len(row) > 7 else "غير متوفر"
-                    }
-                    break
-            if not result:
-                error = "لم يتم العثور على التلميذ. تأكد من المعلومات."
-        else:
+        sheet = sheets.get(section)
+        if sheet is None:
             error = "القسم غير موجود."
+        else:
+            # تطبيع الأسماء داخل الجدول أيضاً
+            sheet['اللقب_معدل'] = sheet.iloc[:, 1].apply(normalize_arabic)
+            sheet['الاسم_معدل'] = sheet.iloc[:, 2].apply(normalize_arabic)
 
-    return render_template("index.html", result=result, error=error)
+            match = sheet[
+                (sheet['اللقب_معدل'] == last_name) &
+                (sheet['الاسم_معدل'] == first_name) &
+                (sheet.iloc[:, 3].astype(str).str.strip() == birth_date)
+            ]
 
+            if not match.empty:
+                average = match.iloc[0, 6]
+                exam = match.iloc[0, 7]
+
+                result = {
+                    'last_name': request.form['last_name'],
+                    'first_name': request.form['first_name'],
+                    'average': average if pd.notna(average) else "غائب",
+                    'exam': exam if pd.notna(exam) else "غائب"
+                }
+            else:
+                error = "لا توجد نتيجة بهذا الاسم وتاريخ الميلاد في هذا القسم."
+
+    return render_template('index.html', result=result, error=error)
+    
 if __name__ == "__main__":
     app.run(debug=True)
